@@ -19,15 +19,6 @@ import app.relay.ui.ErrorText
 import app.relay.ui.LocalServices
 import app.relay.ui.rememberAction
 
-private data class Persona(val name: String, val role: String, val email: String)
-
-// Emails are fixed: existing emulator data is keyed on them.
-private val personas = listOf(
-    Persona("Priya", "client", "priya@example.com"),
-    Persona("Rohan", "freelancer", "rohan@example.com"),
-    Persona("Maya", "replacement", "maya@example.com"),
-)
-
 /**
  * Demo mode (local emulators only): one-click fake Google accounts for the PRD personas.
  * [excludeEmail] hides the persona that is already signed in, so the switcher only offers real switches.
@@ -41,7 +32,7 @@ fun DemoPersonas(after: suspend () -> Unit = {}, excludeEmail: String? = null) {
         StatusPill("Demo mode · local emulator", StatusKind.Neutral)
         RText("Sign in as a fictional persona (fake Google accounts that exist only on this machine).", RelayTheme.type.metadata, color = RelayColors.textSecondary)
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.s8)) {
-            personas.filter { !it.email.equals(excludeEmail, ignoreCase = true) }.forEach { p ->
+            DemoCast.filter { !it.email.equals(excludeEmail, ignoreCase = true) }.forEach { p ->
                 PillButton("${p.name} · ${p.role}", { action.run { s.auth.signInAsDemoPersona(p.name, p.email); after() } }, Modifier.fillMaxWidth(), appearance = PillAppearance.Ghost, size = PillSize.Compact, enabled = !action.running)
             }
         }

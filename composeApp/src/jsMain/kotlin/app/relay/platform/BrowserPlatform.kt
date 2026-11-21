@@ -34,6 +34,17 @@ class BrowserRouter : Router {
     }
 
     override fun back() = window.history.back()
+
+    override fun takeQueryParam(name: String): String? {
+        val params = js("new URLSearchParams(window.location.search)")
+        val value = params.get(name) as String?
+        if (value != null) {
+            params.delete(name)
+            val rest = params.toString() as String
+            window.history.replaceState(null, "", window.location.pathname + (if (rest.isEmpty()) "" else "?$rest") + window.location.hash)
+        }
+        return value
+    }
 }
 
 class BrowserPlatform : Platform {
@@ -84,6 +95,7 @@ class BrowserPlatform : Platform {
 
     /** Opens Razorpay Standard Checkout. The returned callback is NEVER trusted as "paid" — the server verifies. */
     override suspend fun openCheckout(request: CheckoutRequest): CheckoutResult {
+        if (request.orderId.startsWith("order_demo_")) return openDemoCheckout(request)
         if (!ensureCheckoutScript()) return CheckoutResult.Failed("Razorpay checkout could not be loaded.")
         return suspendCancellableCoroutine { cont ->
             var done = false
@@ -104,6 +116,42 @@ class BrowserPlatform : Platform {
             options.theme = js("({color: '#17191C'})")
             options.handler = { resp: dynamic ->
                 finish(CheckoutResult.Completed(resp.razorpay_order_id as String, resp.razorpay_payment_id as String, resp.razorpay_signature as String))
+            }
+            options.modal = js("({})")
+            options.modal.ondismiss = { finish(lastFailure?.let { CheckoutResult.Failed(it) } ?: CheckoutResult.Dismissed) }
+            val ctor = window.asDynamic().Razorpay
+            val rzp = js("Reflect").construct(ctor, arrayOf(options))
+            rzp.on("payment.failed") { resp: dynamic -> lastFailure = (resp?.error?.description as? String) ?: "Payment failed" }
+            rzp.open()
+        }
+    }
+
+    /**
+     * Demo version: real Razorpay test Checkout, but without a server-created order (there is no server).
+     * Test contact is pre-filled. If test keys or the script aren't available, the payment is simulated.
+     */
+    private suspend fun openDemoCheckout(request: CheckoutRequest): CheckoutResult {
+        if (!request.keyId.startsWith("rzp_test_") || request.keyId == "rzp_test_demo" || !ensureCheckoutScript()) {
+            kotlinx.coroutines.delay(1200)
+            return CheckoutResult.Completed(request.orderId, "pay_demo_" + randomToken(14), "")
+        }
+        return suspendCancellableCoroutine { cont ->
+            var done = false
+            var lastFailure: String? = null
+            fun finish(r: CheckoutResult) { if (!done) { done = true; cont.resume(r) } }
+            val options: dynamic = js("({})")
+            options.key = request.keyId
+            options.amount = request.amountMinor.toDouble()
+            options.currency = request.currency
+            options.name = request.name
+            options.description = request.description
+            options.prefill = js("({})")
+            options.prefill.name = request.prefillName
+            options.prefill.email = request.prefillEmail
+            options.prefill.contact = "9000090000"
+            options.theme = js("({color: '#17191C'})")
+            options.handler = { resp: dynamic ->
+                finish(CheckoutResult.Completed(request.orderId, (resp?.razorpay_payment_id as? String) ?: ("pay_demo_" + randomToken(14)), ""))
             }
             options.modal = js("({})")
             options.modal.ondismiss = { finish(lastFailure?.let { CheckoutResult.Failed(it) } ?: CheckoutResult.Dismissed) }

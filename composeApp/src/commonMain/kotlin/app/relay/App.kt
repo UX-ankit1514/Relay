@@ -8,6 +8,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import app.relay.ui.auth.DemoState
+import app.relay.ui.auth.DemoBar
+import app.relay.ui.auth.demoPersona
 import app.relay.data.AuthState
 import app.relay.data.AuthUser
 import app.relay.design.RelayTheme
@@ -40,10 +50,25 @@ fun App(services: AppServices) {
             val auth by services.auth.state.collectAsState()
             val route by services.router.route.collectAsState()
             val user = (auth as? AuthState.SignedIn)?.user
-            CompositionLocalProvider(LocalUser provides user, LocalNavHome provides { services.router.navigate(if (user == null) Route.Landing else Route.Landing) }) {
-                when (auth) {
-                    AuthState.Loading -> LoadingPage()
-                    else -> RouteHost(route, user, services)
+            // Demo links (`?as=priya`) open the page already signed in as that persona — local emulators only.
+            val asParam = remember { services.router.takeQueryParam("as") }
+            var linkPersona by remember { mutableStateOf(if (services.auth.demoMode) demoPersona(asParam) else null) }
+            LaunchedEffect(linkPersona, auth is AuthState.Loading) {
+                val p = linkPersona ?: return@LaunchedEffect
+                if (auth is AuthState.Loading) return@LaunchedEffect
+                if (!user?.email.equals(p.email, ignoreCase = true)) runCatching { services.auth.signInAsDemoPersona(p.name, p.email) }
+                linkPersona = null
+            }
+            CompositionLocalProvider(LocalUser provides user, LocalNavHome provides { services.router.navigate(Route.Landing) }) {
+                val switching = DemoState.switchingTo ?: linkPersona
+                Box(Modifier.fillMaxSize()) {
+                    when {
+                        switching != null -> LoadingPage("Switching to ${switching.name} · ${switching.role}…")
+                        auth is AuthState.Loading -> LoadingPage()
+                        // A fresh screen per account, so every view re-reads with the right permissions.
+                        else -> key(user?.uid) { RouteHost(route, user, services) }
+                    }
+                    DemoBar(user, Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp))
                 }
             }
         }
@@ -65,8 +90,9 @@ private fun RouteHost(route: Route, user: AuthUser?, services: AppServices) {
         var profile by remember(user.uid) { mutableStateOf<UserProfile?>(null) }
         LaunchedEffect(user.uid) { profile = services.repo.ensureProfile(user) }
         if (profile == null) { LoadingPage(); return }
-        if (route is Route.Landing || route is Route.SignIn) {
-            HomeRedirect(user, (route as? Route.SignIn)?.next)
+        // Landing stays reachable when signed in, so the logo always returns to the hero.
+        if (route is Route.SignIn) {
+            HomeRedirect(user, route.next)
             return
         }
     }
@@ -97,6 +123,7 @@ private fun HomeRedirect(user: AuthUser, next: String?) {
             services.router.navigate(Route.parse(next.substringBefore('?'), next.substringAfter('?', "")), replace = true)
             return@LaunchedEffect
         }
+        app.relay.demo.demoHome(services, user)?.let { services.router.navigate(it, replace = true); return@LaunchedEffect }
         val profile = services.repo.observeProfile(user.uid).first()
         val projects = services.repo.observeMyProjects(user.uid).first()
         val target = when {

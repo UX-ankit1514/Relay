@@ -117,7 +117,7 @@ fun ClientOverview(ctx: Ctx) {
                 p.status == ProjectStatus.INTERRUPTED && freelancer != null ->
                     StatusLine("${freelancer.name} is unavailable", StatusKind.Attention, "Their assignment is paused. History and payments are kept — create a handoff for the remaining work.")
             }
-            TitleBlock("Design project · created ${ctx.date(p.createdAt)}", p.name, "Goal: ${p.goal}")
+            TitleBlock("Design project · created ${ctx.date(p.createdAt)}", p.name, "Brief: ${p.goal}")
             Section("Milestones", trailing = {
                 if (p.status == ProjectStatus.WAITING) StatusPill("Draft v${p.agreementVersion} · not agreed yet", StatusKind.Pending)
                 else RText("Agreement v${d.inForce?.version ?: p.agreementVersion} · ${rupees(d.totalMinor)}", RelayTheme.type.metadata, color = RelayColors.textSecondary)
@@ -187,7 +187,8 @@ private fun ClientNextStep(ctx: Ctx, onInterrupt: () -> Unit) {
             "Copy the private invite link and send it. You can still edit the draft until they accept.",
             "Invite expires 7 days after it was created",
             ActionSpec("Copy invite link", { p.inviteToken?.let { ctx.s.platform.copyToClipboard(ctx.s.platform.origin() + "/invite/" + it) } }),
-            listOf(ActionSpec("Edit terms", { ctx.s.router.navigate(app.relay.nav.Route.NewMilestones(p.id)) })),
+            listOf(ActionSpec("Edit terms", { ctx.s.router.navigate(app.relay.nav.Route.NewMilestones(p.id)) })) +
+                listOfNotNull(p.inviteToken?.let { t -> app.relay.ui.auth.demoAction(ctx.s, p.inviteEmail, null, { "Open invite as ${it.name}" }, app.relay.nav.Route.Invite(t)) }),
         )
         d.pendingVersion != null && d.inForce != null -> NextStepPanel(
             "Waiting on Version ${d.pendingVersion!!.version}",
@@ -206,7 +207,8 @@ private fun ClientNextStep(ctx: Ctx, onInterrupt: () -> Unit) {
         p.status == ProjectStatus.INTERRUPTED -> NextStepPanel("Hand off the remaining work", "Relay turns confirmed decisions, approved files and the remaining scope into a brief a replacement can start from.", "History and payments are kept", ActionSpec("Create handoff", { ctx.go(ProjectTab.Handoff) }))
         p.status == ProjectStatus.HANDOFF && h != null -> when (h.status) {
             HandoffStatus.COUNTEROFFER -> NextStepPanel("Review latest proposal", "${h.replacementName ?: "The replacement"} proposed a different fee. Nothing is binding until you both agree.", null, ActionSpec("Open handoff", { ctx.go(ProjectTab.Handoff) }))
-            HandoffStatus.PUBLISHED -> NextStepPanel("Waiting for the replacement", "Share the private handoff link. You’ll see when it’s opened and accepted.", "Link expires ${ctx.date(h.expiresAt)}", ActionSpec("Open handoff", { ctx.go(ProjectTab.Handoff) }))
+            HandoffStatus.PUBLISHED -> NextStepPanel("Waiting for the replacement", "Share the private handoff link. You’ll see when it’s opened and accepted.", "Link expires ${ctx.date(h.expiresAt)}", ActionSpec("Open handoff", { ctx.go(ProjectTab.Handoff) }),
+                listOfNotNull(app.relay.ui.auth.demoAction(ctx.s, h.replacementEmail ?: app.relay.ui.auth.demoOutsider(p.members.values.map { it.email })?.email, null, { "Open link as ${it.name}" }, app.relay.nav.Route.Handoff(h.id))))
             else -> NextStepPanel("${h.replacementName ?: "The replacement"} is on the project", "They see only the brief you shared. Their submission will appear here for review.", null, ActionSpec("Open handoff", { ctx.go(ProjectTab.Handoff) }))
         }
         d.suggestedDecisions.isNotEmpty() -> NextStepPanel("Review ${d.suggestedDecisions.size} suggested ${if (d.suggestedDecisions.size == 1) "decision" else "decisions"}", "AI only suggests. Nothing becomes project memory until you confirm it.", "Suggested by AI · needs your review", ActionSpec("Open decisions", { ctx.go(ProjectTab.Decisions) }))
@@ -270,7 +272,9 @@ fun FreelancerOverview(ctx: Ctx) {
                 interrupted -> NextStepPanel("Nothing to do right now", "Your assignment is paused. Your submitted work and payment records stay on record.", null)
                 current == null -> NextStepPanel("All done for now", "${d.project.ownerName} will assign or add milestones when there’s more work.", null)
                 current.status == MilestoneStatus.CHANGES -> NextStepPanel("Changes requested", "${d.project.ownerName} asked for changes on ${current.title}. Read the note and resubmit.", "Revision ${current.revisionsUsed} of ${current.revisionLimit}", ActionSpec("Open milestone", { ctx.go(ProjectTab.Milestone, current.id) }))
-                current.status == MilestoneStatus.SUBMITTED -> NextStepPanel("Waiting for ${d.project.ownerName}", "Your submission is in review. You’ll see the approval or requested changes here.", null, ActionSpec("Open milestone", { ctx.go(ProjectTab.Milestone, current.id) }))
+                current.status == MilestoneStatus.SUBMITTED -> NextStepPanel("Waiting for ${d.project.ownerName}", "Your submission is in review. You’ll see the approval or requested changes here.", null, ActionSpec("Open milestone", { ctx.go(ProjectTab.Milestone, current.id) }),
+                    listOfNotNull(app.relay.ui.auth.demoAction(ctx.s, d.project.members[d.project.ownerId]?.email, d.project.ownerName, { "Switch to ${it.name} to review" },
+                        d.pendingReviews.firstOrNull { it.milestoneId == current.id }?.let { app.relay.nav.Route.Project(d.project.id, ProjectTab.Review, it.id) } ?: app.relay.nav.Route.Project(d.project.id))))
                 else -> NextStepPanel("Start ${current.title}", "When it’s ready, submit the Figma link for ${d.project.ownerName}’s review.", "Agreed in Version ${d.inForce?.version ?: 1} · ${current.revisionLimit} revisions included", ActionSpec("Open milestone", { ctx.go(ProjectTab.Milestone, current.id) }))
             }
             ContextPanel("Payments · view only", "Your payments", "Milestone" to "Status", mine.map { m ->

@@ -14,6 +14,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.relay.data.parseRupeesToPaise
+import app.relay.data.fileSubtitle
 import app.relay.data.rupees
 import app.relay.design.ActionSpec
 import app.relay.design.Amount
@@ -131,7 +132,7 @@ private fun BriefTab(h: Handoff, joined: Boolean) {
             }
             if (b.notInScope.isNotEmpty()) Section("Not in scope") { ListCard(b.notInScope.map { ListRowSpec(it.title, "Not part of this handoff — don’t build ${it.deliverable.lowercase()}.") { StatusPill("Not in scope", StatusKind.Neutral) } }) }
             if (b.files.isNotEmpty()) Section("Files", "Only what ${b.clientName} shared") {
-                ListCard(b.files.map { f -> ListRowSpec(f.label, f.url) { StatusPill(if (f.status == "approved") "Approved" else "Reference", if (f.status == "approved") StatusKind.Done else StatusKind.Neutral); TextLink("Open →", { s.platform.openExternal(f.url) }, small = true) } })
+                ListCard(b.files.map { f -> ListRowSpec(f.label, fileSubtitle(f.url, f.note)) { StatusPill(if (f.status == "approved") "Approved" else "Reference", if (f.status == "approved") StatusKind.Done else StatusKind.Neutral); TextLink("Open →", { s.platform.openExternal(f.url) }, small = true) } })
             }
         },
         rail = {
@@ -173,7 +174,8 @@ private fun TermsTab(h: Handoff) {
             when {
                 h.status !in listOf(HandoffStatus.PUBLISHED, HandoffStatus.COUNTEROFFER) -> NextStepPanel("Terms agreed", "You accepted ${rupees(fee)}. Submit your work from My work.", null, ActionSpec("Open my work", { s.router.navigate(Route.Handoff(h.id, HandoffTab.Work)) }))
                 pending != null -> NextStepPanel("Waiting for ${h.ownerName}", "You’ll see here when ${h.ownerName} accepts or rejects ${rupees(pending.amountMinor)}. You can withdraw it.", "Proposal v${pending.version} · pending", null,
-                    listOf(ActionSpec("Withdraw proposal", { signThen { s.repo.handoffAction(h.id, "withdraw") } })))
+                    listOf(ActionSpec("Withdraw proposal", { signThen { s.repo.handoffAction(h.id, "withdraw") } })) +
+                        listOfNotNull(app.relay.ui.auth.demoAction(s, null, h.ownerName, { "Switch to ${it.name} to respond" }, Route.Project(h.projectId, app.relay.nav.ProjectTab.Handoff))))
                 else -> NextStepPanel("Accept ${rupees(fee)}?", if (user == null) "You’ll sign in with Google to lock in this version and its timestamp." else "Signed in as ${user.email}. Accepting locks in this version and its timestamp.", "Offer from ${h.ownerName}",
                     ActionSpec(if (user == null) "Continue with Google & accept" else "Accept ${rupees(fee)}", { signThen { s.repo.handoffAction(h.id, "accept"); s.router.navigate(Route.Handoff(h.id, HandoffTab.Work)) } }, loading = action.running),
                     listOf(ActionSpec("Propose a different fee", { proposeOpen = true }), ActionSpec("Decline", { declineOpen = true })))
@@ -248,7 +250,9 @@ private fun WorkTab(h: Handoff, subs: List<app.relay.model.Submission>) {
                             s.router.navigate(Route.Handoff(h.id, HandoffTab.Status))
                         }
                     }, loading = action.running))
-            } else NextStepPanel(if (h.status == HandoffStatus.SUBMITTED) "Waiting for ${h.ownerName}" else "Nothing to do right now", "If ${h.ownerName} requests changes, you’ll see the note here and can resubmit.", null, ActionSpec("View status", { s.router.navigate(Route.Handoff(h.id, HandoffTab.Status)) }))
+            } else NextStepPanel(if (h.status == HandoffStatus.SUBMITTED) "Waiting for ${h.ownerName}" else "Nothing to do right now", "If ${h.ownerName} requests changes, you’ll see the note here and can resubmit.", null, ActionSpec("View status", { s.router.navigate(Route.Handoff(h.id, HandoffTab.Status)) }),
+                listOfNotNull(if (h.status == HandoffStatus.SUBMITTED) app.relay.ui.auth.demoAction(s, null, h.ownerName, { "Switch to ${it.name} to review" },
+                    subs.firstOrNull()?.let { Route.Project(h.projectId, app.relay.nav.ProjectTab.Review, it.id) } ?: Route.Project(h.projectId)) else null))
             ContextPanel("Status", h.brief.work.joinToString { it.title }, "Step" to "Status", statusRows(h, subs))
         },
     )

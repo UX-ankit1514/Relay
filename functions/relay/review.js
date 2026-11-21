@@ -32,6 +32,8 @@ export const reviewSubmission = onCall(CALL_OPTS, async (req) => {
     const handoff = handoffRef ? await tx.get(handoffRef) : null;
 
     let links = (Array.isArray(s.links) ? s.links : []).filter((l) => isHttpUrl(l?.url));
+    // The file belongs to whoever submitted it; only a link the client adds here is theirs.
+    const submitterOwnsFile = links.length > 0;
     if (approve && approvedLink) {
       if (!isHttpUrl(approvedLink)) throw new HttpsError("invalid-argument", "Enter a valid link to the approved file.");
       links = [...links, { label: "Approved file", url: approvedLink }];
@@ -44,7 +46,8 @@ export const reviewSubmission = onCall(CALL_OPTS, async (req) => {
       const assetRef = ref.collection("assets").doc();
       tx.set(assetRef, {
         id: assetRef.id, label: s.label, url: links[0].url, status: "approved", milestoneId: s.milestoneId,
-        addedBy: user.uid, addedByName: user.name, note: `Approved by ${user.name}`, createdAt: t,
+        addedBy: submitterOwnsFile ? s.submittedBy : user.uid, addedByName: submitterOwnsFile ? s.submittedByName : user.name,
+        note: `Approved by ${user.name}`, createdAt: t,
       });
       if (handoff?.exists) {
         tx.update(handoffRef, { status: "approved", approvedAt: t });

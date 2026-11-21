@@ -129,7 +129,7 @@ fun ProjectScreen(route: Route.Project) {
     Page(
         header = {
             TopBar(
-                onLogo = { s.router.navigate(Route.Project(p.id)) },
+                onLogo = { s.router.navigate(Route.Landing) },
                 projectName = p.name,
                 projectStatus = statusChip(data),
                 role = if (ctx.isOwner) "Client" else "Freelancer",

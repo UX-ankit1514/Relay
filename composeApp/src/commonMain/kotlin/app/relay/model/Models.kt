@@ -50,7 +50,7 @@ object ProjectStatus {
 data class Project(
     val id: String = "",
     val name: String = "",
-    val goal: String = "",
+    val goal: String = "", // the project brief: free text, copied into every handoff
     val ownerId: String = "",
     val ownerName: String = "",
     val status: String = ProjectStatus.DRAFT,
@@ -278,7 +278,7 @@ data class BriefMilestone(val milestoneId: String = "", val title: String = "", 
 @Serializable
 data class Brief(
     val projectName: String = "",
-    val goal: String = "",
+    val goal: String = "", // the project brief: free text, copied into every handoff
     val clientName: String = "",
     val approvedWork: List<BriefFile> = emptyList(),
     val work: List<BriefMilestone> = emptyList(),

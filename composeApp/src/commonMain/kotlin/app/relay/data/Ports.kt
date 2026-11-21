@@ -98,4 +98,23 @@ interface Router {
     val route: StateFlow<app.relay.nav.Route>
     fun navigate(route: app.relay.nav.Route, replace: Boolean = false)
     fun back()
+    /** Reads a query parameter from the current URL and removes it (e.g. a demo `?as=priya` link). */
+    fun takeQueryParam(name: String): String? = null
+}
+
+/** Small persistent key-value storage (browser localStorage). */
+interface KeyValue {
+    fun get(key: String): String?
+    fun put(key: String, value: String?)
+}
+
+/**
+ * Which data the app runs on. Original = your real Firebase project (Google sign-in).
+ * Demo = a ready-made story (Priya, Rohan, Maya) kept only in this browser. Switching reloads the app.
+ */
+interface AppMode {
+    val isDemo: Boolean
+    fun switchTo(demo: Boolean)
+    /** Demo only: throws away demo changes and restores the ready-made story. */
+    fun resetDemo()
 }

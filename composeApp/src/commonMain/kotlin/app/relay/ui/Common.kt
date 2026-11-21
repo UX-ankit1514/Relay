@@ -35,6 +35,9 @@ class AppServices(
     val repo: RelayRepository,
     val router: Router,
     val platform: Platform,
+    val files: app.relay.data.FileStore,
+    /** Original ⇄ Demo switch. Null where the platform can't switch. */
+    val mode: app.relay.data.AppMode? = null,
 )
 
 val LocalServices = staticCompositionLocalOf<AppServices> { error("AppServices not provided") }
@@ -84,7 +87,7 @@ fun ErrorText(message: String?) {
 
 @Composable
 fun LoadingPage(label: String = "Loading…") {
-    Page(header = { TopBar(onLogo = {}) }) {
+    Page(header = { val home = LocalNavHome.current; TopBar(onLogo = home) }) {
         CenteredColumn { RText(label, RelayTheme.type.ui, color = RelayColors.textSecondary) }
     }
 }

@@ -21,13 +21,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.relay.data.DocLimits
+import app.relay.data.PickedFile
+import app.relay.data.RelayError
+import app.relay.data.addBriefDocument
 import app.relay.data.formatInr
 import app.relay.data.parseRupeesToPaise
+import app.relay.data.readableSize
+import app.relay.data.rejectReason
 import app.relay.data.rupees
 import app.relay.design.CategoryLabel
 import app.relay.design.FloatingCard
 import app.relay.design.KeyValueTable
+import app.relay.design.ListCard
+import app.relay.design.ListRowSpec
 import app.relay.design.MistPanel
+import app.relay.design.PillSize
+import app.relay.design.StatusPill
 import app.relay.design.NeutralCard
 import app.relay.design.OrDivider
 import app.relay.design.Page
@@ -156,21 +166,74 @@ fun NewProjectScreen() {
     var goal by remember { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
     val action = rememberAction()
+    val scope = rememberCoroutineScope()
+    // Brief documents: chosen here, uploaded on Next (Storage needs the project to exist first).
+    val docs = remember { mutableStateListOf<PickedFile>() }
+    val uploaded = remember { mutableStateListOf<PickedFile>() }
+    var docNotice by remember { mutableStateOf<String?>(null) }
+    // Kept after a failed upload so retrying Next never creates a second project.
+    var createdId by remember { mutableStateOf<String?>(null) }
     val nameErr = if (tried && name.isBlank()) "Give the project a name." else null
-    val goalErr = if (tried && goal.isBlank()) "Add a one-line goal." else null
+    val goalErr = if (tried && goal.isBlank()) "Write a short brief so the freelancer knows what to make." else null
+    val attach: () -> Unit = {
+        scope.launch {
+            val problems = mutableListOf<String>()
+            s.files.pick().forEach { f ->
+                if (docs.any { it.name == f.name && it.sizeBytes == f.sizeBytes }) return@forEach
+                val why = rejectReason(f, docs)
+                if (why != null) problems += why else docs += f
+            }
+            docNotice = problems.firstOrNull()?.let { if (problems.size > 1) "$it (+${problems.size - 1} more not added)" else it }
+        }
+    }
     OnboardingPage(step = 3) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.s80)) {
             Column(Modifier.width(560.dp), verticalArrangement = Arrangement.spacedBy(Space.s24)) {
                 CategoryLabel("New project")
                 RText("What are you working on?", RelayTheme.type.heading)
-                RText("Two details are enough to start. You can add everything else later.", RelayTheme.type.body, color = RelayColors.textSecondary)
+                RText("Give the project a name and a brief. A freelancer who joins later reads this first.", RelayTheme.type.body, color = RelayColors.textSecondary)
                 RelayTextField(name, { name = it }, "Project name", Modifier.fillMaxWidth(), placeholder = "ClearInvoice landing page", helper = "Everyone you invite sees this name.", error = nameErr)
-                RelayTextField(goal, { goal = it }, "Goal (one line)", Modifier.fillMaxWidth(), placeholder = "Convert LinkedIn visitors into demo bookings.", helper = "Shown at the top of every agreement and handoff.", error = goalErr)
+                RelayTextField(
+                    goal, { goal = it }, "Project brief", Modifier.fillMaxWidth(), singleLine = false,
+                    placeholder = "What are we making, and why? Who is it for? What should it do, which pages or screens, what style, and what does done look like?",
+                    helper = "Shown at the top of every agreement and handoff. The more detail, the less the next freelancer has to ask.", error = goalErr,
+                )
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.s12)) {
+                    RText("Brief documents (optional)", RelayTheme.type.caption)
+                    if (docs.isNotEmpty()) {
+                        ListCard(docs.map { f ->
+                            val done = f in uploaded
+                            ListRowSpec(f.name, readableSize(f.sizeBytes) + if (done) " · uploaded" else " · uploads when you continue") {
+                                if (done) StatusPill("Uploaded", StatusKind.Done)
+                                else TextLink("Remove", { docs.remove(f); docNotice = null }, small = true, enabled = !action.running)
+                            }
+                        })
+                    }
+                    PillButton(
+                        if (docs.isEmpty()) "Attach documents" else "Attach more", attach,
+                        appearance = PillAppearance.Ghost, size = PillSize.Compact,
+                        enabled = !action.running && docs.size < DocLimits.MAX_FILES,
+                    )
+                    RText(
+                        docNotice ?: "Specs, briefs, brand guides, wireframes or references. PDF, Word, slides, sheets or images, up to 10 MB each. Your freelancer and any replacement can open them.",
+                        RelayTheme.type.metadata, color = if (docNotice != null) RelayColors.textOnAccent else RelayColors.textSecondary,
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(Space.s12)) {
-                    PillButton("Next", {
+                    PillButton(if (action.running && docs.any { it !in uploaded }) "Uploading" else "Next", {
                         tried = true
                         if (name.isNotBlank() && goal.isNotBlank()) action.run {
-                            val id = s.repo.createProject(user, name, goal)
+                            val existing = createdId
+                            val id = existing ?: s.repo.createProject(user, name, goal).also { createdId = it }
+                            if (existing != null) s.repo.updateProjectBasics(id, name, goal)
+                            for (f in docs.filter { it !in uploaded }) {
+                                try {
+                                    s.repo.addBriefDocument(user, id, s.files, f)
+                                } catch (t: Throwable) {
+                                    throw RelayError("“${f.name}” didn’t upload, so nothing was lost. Try Next again, or remove the file to continue without it.")
+                                }
+                                uploaded += f
+                            }
                             s.router.navigate(Route.NewMilestones(id))
                         }
                     }, loading = action.running)
@@ -182,7 +245,9 @@ fun NewProjectScreen() {
                 CategoryLabel("Live preview")
                 NeutralCard(
                     name.ifBlank { "Your project" }, Modifier.fillMaxWidth(), category = "Project · Draft",
-                    body = "Goal: " + goal.ifBlank { "—" } + "\n\nNext you’ll add milestones and invite your freelancer.",
+                    body = "Brief: " + goal.ifBlank { "—" } +
+                        (if (docs.isEmpty()) "" else "\n\nDocuments: " + docs.joinToString { it.name }) +
+                        "\n\nNext you’ll add milestones and invite your freelancer.",
                 )
             }
         }

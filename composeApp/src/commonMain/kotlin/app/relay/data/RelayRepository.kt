@@ -246,9 +246,11 @@ class RelayRepository(val db: Db, val backend: Backend, val platform: Platform) 
         ))
     }
 
-    suspend fun reviewSubmission(projectId: String, submissionId: String, approve: Boolean, note: String) {
+    /** [approvedLink] is the evidence the client adds when the submission has no usable link (server rejects approval without one). */
+    suspend fun reviewSubmission(projectId: String, submissionId: String, approve: Boolean, note: String, approvedLink: String = "") {
         backend.call("reviewSubmission", buildJsonObject {
             put("projectId", projectId); put("submissionId", submissionId); put("approve", approve); put("note", note)
+            if (approvedLink.isNotBlank()) put("approvedLink", approvedLink)
         })
     }
 

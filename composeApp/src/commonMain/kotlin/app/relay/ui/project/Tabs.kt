@@ -24,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
+import app.relay.data.fileSubtitle
+import app.relay.data.isUploadedFile
 import app.relay.data.parseRupeesToPaise
 import app.relay.data.rupees
 import app.relay.design.ActionSpec
@@ -444,8 +446,12 @@ fun FilesTab(ctx: Ctx) {
                 val items = d.assets.filter { it.status == st }
                 if (items.isNotEmpty()) Section(label) {
                     ListCard(items.map { a ->
-                        ListRowSpec(a.label, "${a.url} · added by ${a.addedByName} · ${ctx.date(a.createdAt)}" + (if (a.note.isNotBlank()) " · ${a.note}" else "")) {
-                            when (st) { "approved" -> StatusPill("Approved", StatusKind.Done); "no_access" -> StatusPill("Request access to this file", StatusKind.Attention); else -> StatusPill("Reference", StatusKind.Neutral) }
+                        // Approvals recorded before the server fix carry the reviewer's name; the file belongs to whoever submitted it.
+                        val approvedSub = if (st == "approved") d.milestones.firstOrNull { it.id == a.milestoneId }?.approvedSubmissionId?.let { sid -> d.submissions.firstOrNull { it.id == sid } } else null
+                        val addedBy = approvedSub?.takeIf { sub -> sub.links.any { it.url == a.url && it.label != "Approved file" } }?.submittedByName ?: a.addedByName
+                        ListRowSpec(a.label, "${if (isUploadedFile(a.url)) "Uploaded document" else a.url} · added by $addedBy · ${ctx.date(a.createdAt)}" + (if (a.note.isNotBlank()) " · ${a.note}" else "")) {
+                            // "Approved" is a record, not a control: an outlined tag, so it isn't mistaken for the ink Approve button (which lives on the Review page).
+                            when (st) { "approved" -> StatusPill("✓ Approved", StatusKind.Neutral); "no_access" -> StatusPill("Request access to this file", StatusKind.Attention); else -> StatusPill("Reference", StatusKind.Neutral) }
                             TextLink("Open →", { ctx.s.platform.openExternal(a.url) }, small = true)
                         }
                     })
@@ -500,13 +506,17 @@ fun ReviewPage(ctx: Ctx, submissionId: String?) {
                 crit.forEach { (l, desc) -> CheckboxRow(criteria[l] == true, { criteria[l] = it }, l, Modifier.fillMaxWidth(), desc) }
             }
             if (sub.note.isNotBlank()) Section("${sub.submittedByName}’s note") { MistPanel { RText(sub.note, RelayTheme.type.body) } }
-            ErrorText(action.error)
         },
         rail = {
             if (sub.status != SubmissionStatus.SUBMITTED) NextStepPanel(if (sub.status == SubmissionStatus.APPROVED) "${sub.label} approved." else "Changes requested", "Recorded ${ctx.time(sub.reviewedAt)}.", null, ActionSpec("Back to overview", { ctx.go(ProjectTab.Overview) }))
             else NextStepPanel(if (blocked) "Add the approved file" else "Approve ${sub.label}?", if (blocked) "Approval needs evidence: a link to the exact version you’re approving." else "Approving records this version and its link as approved. Payment becomes available afterwards.", "Only you can approve · AI never approves",
-                ActionSpec("Approve", { action.run { ctx.repo.reviewSubmission(ctx.p.id, sub.id, true, if (validLinks.isEmpty()) "" else ""); m?.let { ctx.go(ProjectTab.Payment, it.id) } } }, enabled = !blocked, loading = action.running),
+                ActionSpec("Approve", { action.run {
+                    ctx.repo.reviewSubmission(ctx.p.id, sub.id, true, "", approvedLink = if (validLinks.isEmpty()) withScheme(approvedLink) else "")
+                    m?.let { ctx.go(ProjectTab.Payment, it.id) }
+                } }, enabled = !blocked, loading = action.running),
                 listOf(ActionSpec("Request changes", { changesOpen = true })))
+            // Next to the button, so a rejected approval is never off-screen.
+            ErrorText(action.error)
             m?.let { ContextPanel("Milestone ${it.index}", it.title, "Item" to "Status", listOf("Fee" to rupees(it.replacementFeeMinor ?: it.amountMinor), "Revisions" to "${it.revisionsUsed} of ${it.revisionLimit} used", "Evidence" to if (validLinks.isEmpty()) "Missing" else "${validLinks.size} link(s)", "Payment" to "Locked until approval")) }
         },
     )
@@ -609,7 +619,7 @@ fun HandoffTab(ctx: Ctx) {
                     if (d.assets.isNotEmpty()) Section("Files", "Untick private items — excluded items are never reachable through the link") {
                         d.assets.forEach { a ->
                             CheckboxRow(a.id !in excludedAssets && a.status != "no_access", { on -> if (a.status != "no_access") { if (on) excludedAssets.remove(a.id) else excludedAssets.add(a.id) } }, a.label, Modifier.fillMaxWidth(),
-                                if (a.status == "no_access") "Request access to this file — excluded until someone can open it" else a.url, error = a.status == "no_access")
+                                if (a.status == "no_access") "Request access to this file — excluded until someone can open it" else fileSubtitle(a.url, a.note), error = a.status == "no_access")
                         }
                     }
                     ErrorText(action.error)
@@ -634,7 +644,8 @@ fun HandoffTab(ctx: Ctx) {
                 live?.status == HandoffStatus.COUNTEROFFER -> NextStepPanel("Review latest proposal", "Accept to make the new fee binding (the replacement then confirms), or reject to keep the current offer.", "Only one proposal can be open at a time",
                     ActionSpec("Accept ${rupees(live.proposals.last { it.status == "proposed" }.amountMinor)}", { action.run { ctx.repo.handoffAction(live.id, "acceptProposal") } }, loading = action.running),
                     listOf(ActionSpec("Reject", { action.run { ctx.repo.handoffAction(live.id, "rejectProposal") } })))
-                live?.status == HandoffStatus.PUBLISHED -> NextStepPanel("Waiting for the replacement", "You’ll see when they open the brief and accept, propose a fee or decline.", "Link expires ${ctx.date(live.expiresAt)}", ActionSpec("Copy link", { ctx.s.platform.copyToClipboard(link(live.id)) }))
+                live?.status == HandoffStatus.PUBLISHED -> NextStepPanel("Waiting for the replacement", "You’ll see when they open the brief and accept, propose a fee or decline.", "Link expires ${ctx.date(live.expiresAt)}", ActionSpec("Copy link", { ctx.s.platform.copyToClipboard(link(live.id)) }),
+                    listOfNotNull(app.relay.ui.auth.demoAction(ctx.s, live.replacementEmail ?: app.relay.ui.auth.demoOutsider(ctx.p.members.values.map { it.email })?.email, null, { "Open link as ${it.name}" }, app.relay.nav.Route.Handoff(live.id))))
                 live?.status == HandoffStatus.SUBMITTED -> { val sub = d.pendingReviews.firstOrNull { it.handoffId == live.id }; NextStepPanel("Review ${sub?.label ?: "the submission"}", "${live.replacementName} submitted work for review.", null, sub?.let { ActionSpec("Review submission", { ctx.go(ProjectTab.Review, it.id) }) }) }
                 live?.status == HandoffStatus.APPROVED -> { val m = d.milestones.firstOrNull { it.id in live.milestoneIds }; NextStepPanel("Pay ${live.replacementName}", "The work is approved. Pay ${rupees(live.agreedFeeMinor ?: live.feeMinor)} in Razorpay test mode.", null, m?.let { ActionSpec("Go to payment", { ctx.go(ProjectTab.Payment, it.id) }) }) }
                 live != null -> NextStepPanel("${live.replacementName ?: "Replacement"} is working", "They see only the brief you shared. Their submission will appear here for review.", "Agreed ${rupees(live.agreedFeeMinor ?: live.feeMinor)}", null)
