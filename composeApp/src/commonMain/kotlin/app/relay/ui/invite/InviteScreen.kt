@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +33,7 @@ import app.relay.design.Section
 import app.relay.design.Space
 import app.relay.design.StatusKind
 import app.relay.design.StatusPill
+import app.relay.design.TextLink
 import app.relay.design.TitleBlock
 import app.relay.design.TopBar
 import app.relay.design.WorkspaceLayout
@@ -45,6 +47,8 @@ import app.relay.ui.MessagePage
 import app.relay.ui.friendlyError
 import app.relay.ui.initialsOf
 import app.relay.ui.rememberAction
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** F2 · Invite link — the freelancer sees the project and terms first, and signs up only to accept. */
 @Composable
@@ -55,6 +59,11 @@ fun InviteScreen(token: String) {
     var loaded by remember(token) { mutableStateOf(false) }
     var loadError by remember(token) { mutableStateOf<String?>(null) }
     val action = rememberAction()
+    val scope = rememberCoroutineScope()
+    var copied by remember(token) { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { delay(2500); copied = false } }
+    // A failed accept (e.g. "This is your own invite") must not linger after switching accounts.
+    LaunchedEffect(user?.uid) { action.error = null }
     LaunchedEffect(token, user?.uid) {
         try { invite = s.repo.getInvite(token) } catch (t: Throwable) { loadError = friendlyError(t) }
         loaded = true
@@ -77,8 +86,14 @@ fun InviteScreen(token: String) {
         }
     }
     LocalUserHolder.current = user
+    // Signing out keeps this public page open, so it re-renders with sign-in and persona options.
+    val switchAccount: () -> Unit = { scope.launch { s.auth.signOut() } }
+    val isOwner = user != null && user.uid == inv.ownerId
     Page(header = {
-        TopBar(onLogo = home, projectName = inv.projectName, projectStatus = "Waiting for your acceptance" to StatusKind.Pending, role = "Invited freelancer", avatarInitials = user?.let { initialsOf(it.displayName) })
+        TopBar(onLogo = home, projectName = inv.projectName,
+            projectStatus = (if (isOwner) "Waiting for your freelancer" else "Waiting for your acceptance") to StatusKind.Pending,
+            role = if (isOwner) "Client" else "Invited freelancer",
+            avatarInitials = user?.let { initialsOf(it.displayName) }, onSignOut = switchAccount)
     }) {
         WorkspaceLayout(
             main = {
@@ -98,12 +113,23 @@ fun InviteScreen(token: String) {
                 if (user == null) {
                     NextStepPanel("Review and accept", "Accepting creates your Relay account with Google and saves these terms as Version ${inv.agreementVersion}.", "No payment is taken from you",
                         ActionSpec("Continue with Google & accept", { accept() }, loading = action.running))
+                    ErrorText(action.error)
+                    app.relay.ui.auth.DemoPersonas()
+                } else if (isOwner) {
+                    // The server refuses an owner accepting their own invite; offer the useful next moves instead.
+                    NextStepPanel("This is your own invite",
+                        "You created this project as ${user.displayName}. Send this link to your freelancer — they review these terms and accept. To try the freelancer side yourself, switch to another account.",
+                        "Signed in as ${user.email}",
+                        ActionSpec(if (copied) "Link copied" else "Copy invite link", { s.platform.copyToClipboard(s.platform.origin() + "/invite/" + token); copied = true }),
+                        listOf(ActionSpec("Switch account", switchAccount)))
+                    TextLink("Back to project →", { s.router.navigate(Route.Project(inv.projectId)) })
+                    app.relay.ui.auth.DemoPersonas(excludeEmail = user.email)
                 } else {
                     NextStepPanel("Review and accept", "You’re signed in as ${user.email}. Accepting saves these terms as Version ${inv.agreementVersion} with a timestamp, and ${inv.ownerName} is notified.", "No payment is taken from you",
                         ActionSpec("Accept terms", { accept() }, loading = action.running))
+                    ErrorText(action.error)
+                    TextLink("Not you? Switch account", switchAccount, small = true)
                 }
-                ErrorText(action.error)
-                if (user == null) app.relay.ui.auth.DemoPersonas()
                 ContextPanel("Agreement", "At a glance", "Item" to "Detail", listOf("Proposed by" to "${inv.ownerName} · ${s.platform.formatDate(inv.createdAt)}", "Version" to "Draft v${inv.agreementVersion}", "Milestones" to "${inv.terms.size}", "Total" to rupees(inv.totalMinor), "Your first milestone" to (inv.terms.firstOrNull()?.title ?: "—")))
             },
         )
