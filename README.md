@@ -78,9 +78,13 @@ With `relay.useEmulators=true`, the sign-in screens show **Priya / Rohan / Maya*
 
 ## Deploying
 
+Live (Firebase Hosting): **https://relay-4ef17.web.app**
+
 ```bash
-./gradlew :composeApp:jsBrowserDistribution
-firebase deploy --only hosting,firestore,functions
+# Production build: RELAY_USE_EMULATORS=false overrides relay.useEmulators=true in local.properties
+RELAY_USE_EMULATORS=false ./gradlew :composeApp:jsBrowserDistribution
+firebase deploy --only hosting,firestore            # works on the free Spark plan
+firebase deploy --only functions                    # needs the Blaze plan + secrets in Secret Manager
 ```
 
 Deploying needs three things:

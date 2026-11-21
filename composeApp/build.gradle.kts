@@ -30,7 +30,10 @@ val relayConfig: Map<String, String> = linkedMapOf(
     "firebaseMessagingSenderId" to cfg("firebase.messagingSenderId", "RELAY_FIREBASE_MESSAGING_SENDER_ID"),
     "firebaseAppId" to cfg("firebase.appId", "RELAY_FIREBASE_APP_ID"),
     "razorpayKeyId" to cfg("razorpay.keyId", "RELAY_RAZORPAY_KEY_ID"),
-    "useEmulators" to cfg("relay.useEmulators", "RELAY_USE_EMULATORS").ifEmpty { "false" },
+    // RELAY_USE_EMULATORS (env) wins over local.properties, so a production build can be made from a dev checkout:
+    //   RELAY_USE_EMULATORS=false ./gradlew :composeApp:jsBrowserDistribution
+    "useEmulators" to (System.getenv("RELAY_USE_EMULATORS")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: cfg("relay.useEmulators", "RELAY_USE_EMULATORS")).ifEmpty { "false" },
 )
 
 val generatedConfigDir = layout.buildDirectory.dir("generated/relayConfig/kotlin")
