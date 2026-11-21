@@ -1,0 +1,47 @@
+# ── Secrets & local config (never commit) ─────────────────────────
+local.properties
+.env
+.env.*
+!.env.example
+*.secret
+functions/.secret.local
+functions/.env*
+!functions/.env.example
+*firebase-js-config*
+rzp-key*.csv
+*.secret.local
+*sdkconfig*
+service-account*.json
+*-adminsdk-*.json
+
+# ── Source documents kept outside the repo ───────────────────────
+*.rtf
+
+# ── Claude Code local settings ────────────────────────────────────
+.claude/settings.local.json
+
+# ── Gradle / Kotlin ───────────────────────────────────────────────
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.kotlin/
+kotlin-js-store/.cache/
+*.hprof
+
+# ── IDE ───────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+.fleet/
+
+# ── Node / Firebase ───────────────────────────────────────────────
+node_modules/
+functions/lib/
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+*.log
+
+# ── OS ────────────────────────────────────────────────────────────
+.DS_Store

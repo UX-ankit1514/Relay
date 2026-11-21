@@ -1,0 +1,176 @@
+rules_version = '2';
+
+// Relay — Firestore Security Rules
+// Principles (PRD §23, §27):
+//  • Project data is visible only to project members (owner + original freelancer).
+//  • Replacements never read the project; they read only their handoff document (the reviewed brief).
+//  • Agreement acceptance, handoff publishing/acceptance, submission review and verified
+//    payments are written only by Cloud Functions (Admin SDK bypasses these rules).
+//  • Messages, agreements, submissions and payment records are append-only from clients.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function projectDoc(pid) { return get(/databases/$(database)/documents/projects/$(pid)).data; }
+    function isMember(pid) { return signedIn() && me() in projectDoc(pid).memberIds; }
+    function isOwner(pid) { return signedIn() && projectDoc(pid).ownerId == me(); }
+    // State after the current batch — for docs written in the same batch that creates the project.
+    function isMemberAfter(pid) { return signedIn() && me() in getAfter(/databases/$(database)/documents/projects/$(pid)).data.memberIds; }
+    function changesOnly(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+    function preAgreement(pid) { return projectDoc(pid).status in ['draft', 'waiting_agreement']; }
+
+    // ── People ───────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read, write: if signedIn() && me() == userId;
+    }
+
+    // ── Projects ─────────────────────────────────────────────────────────
+    match /projects/{pid} {
+      allow read: if signedIn() && me() in resource.data.memberIds;
+
+      allow create: if signedIn()
+        && request.resource.data.ownerId == me()
+        && request.resource.data.memberIds == [me()]
+        && request.resource.data.status == 'draft';
+
+      // Owner edits; membership (memberIds) only changes server-side via acceptInvite.
+      allow update: if signedIn()
+        && resource.data.ownerId == me()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.memberIds == resource.data.memberIds
+        && changesOnly(['name', 'goal', 'status', 'agreementStatus', 'agreementVersion',
+                        'inviteToken', 'inviteEmail', 'members', 'updatedAt'])
+        && request.resource.data.status in ['draft', 'waiting_agreement', 'active', 'interrupted', 'handoff', 'completed'];
+
+      allow delete: if false;
+
+      match /milestones/{mid} {
+        allow read: if isMember(pid);
+        allow create, delete: if isOwner(pid) && preAgreement(pid);
+        allow update: if (
+            // Draft editing before anyone has agreed.
+            isOwner(pid) && preAgreement(pid)
+              && request.resource.data.get('paymentStatus', 'unpaid') in ['unpaid']
+              && request.resource.data.get('paidVerifiedMinor', 0) == 0
+          ) || (
+            // Owner records a payment made outside Relay — never "verified".
+            isOwner(pid)
+              && changesOnly(['paymentStatus', 'paidExternallyMinor'])
+              && request.resource.data.paymentStatus == 'recorded_externally'
+          ) || (
+            // The assigned freelancer marks their own work as submitted.
+            isMember(pid) && resource.data.assigneeId == me()
+              && changesOnly(['status']) && request.resource.data.status == 'submitted'
+          );
+      }
+
+      match /agreements/{vid} {
+        allow read: if isMember(pid);
+        allow create: if isOwner(pid)
+          && request.resource.data.status == 'proposed'
+          && request.resource.data.proposedBy == me();
+        allow update, delete: if false; // acceptance recorded server-side with a timestamp
+      }
+
+      match /messages/{msgId} {
+        allow read: if isMember(pid);
+        allow create: if isMember(pid)
+          && request.resource.data.authorId == me()
+          && request.resource.data.body is string
+          && request.resource.data.body.size() > 0
+          && request.resource.data.body.size() <= 4000;
+        allow update, delete: if false; // messages are source records
+      }
+
+      match /decisions/{did} {
+        allow read: if isMember(pid);
+        // People may add decisions by hand; AI suggestions are created only by the server.
+        allow create: if isMember(pid)
+          && request.resource.data.origin == 'manual'
+          && (request.resource.data.status == 'suggested'
+              || (isOwner(pid) && request.resource.data.status == 'confirmed' && request.resource.data.confirmedBy == me()));
+        // Only the client confirms, edits or rejects — and the reviewer is recorded.
+        allow update: if isOwner(pid)
+          && request.resource.data.confirmedBy == me()
+          && request.resource.data.status in ['confirmed', 'rejected', 'superseded']
+          && changesOnly(['status', 'title', 'summary', 'reviewNote', 'confirmedBy', 'confirmedByName', 'confirmedAt']);
+        allow delete: if false;
+      }
+
+      match /assets/{aid} {
+        allow read: if isMember(pid);
+        allow create: if isMember(pid) && request.resource.data.addedBy == me()
+          && request.resource.data.url is string && request.resource.data.url.size() < 2048;
+        allow update: if isOwner(pid);
+        allow delete: if false;
+      }
+
+      match /submissions/{sid} {
+        allow read: if isMember(pid);
+        allow create: if isMember(pid)
+          && request.resource.data.submittedBy == me()
+          && request.resource.data.status == 'submitted'
+          && request.resource.data.links.size() > 0;
+        allow update, delete: if false; // approval / changes requested are recorded server-side
+      }
+
+      match /payments/{payId} {
+        allow read: if isMember(pid);
+        allow create: if isOwner(pid)
+          && request.resource.data.mode == 'external_record'
+          && request.resource.data.status == 'recorded_externally'
+          && request.resource.data.recordedBy == me();
+        allow update, delete: if false; // verified payments are written only by the server
+      }
+
+      match /events/{eid} {
+        allow read: if isMember(pid);
+        allow create: if isMemberAfter(pid) && request.resource.data.actorId == me();
+        allow update, delete: if false;
+      }
+
+      match /private/{docId} {
+        allow read, write: if isOwner(pid);
+      }
+    }
+
+    // ── Invites: the unguessable token is the document id ────────────────
+    // Anyone holding a live link may read it (context before sign-up, IA §1).
+    match /invites/{token} {
+      allow get: if resource.data.status == 'pending'
+        || (signedIn() && (resource.data.ownerId == me() || resource.data.get('acceptedBy', '') == me()));
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.ownerId == me()
+        && isOwner(request.resource.data.projectId)
+        && request.resource.data.status == 'pending';
+      allow update: if signedIn()
+        && resource.data.ownerId == me()
+        && request.resource.data.ownerId == me()
+        && (resource.data.status == 'pending' || request.resource.data.status == 'revoked');
+      allow delete: if false;
+    }
+
+    // ── Handoffs: the reviewed brief for a replacement (doc id = share token) ──
+    match /handoffs/{token} {
+      allow get: if (resource.data.status in ['published', 'counteroffer'] && resource.data.expiresAt > request.time.toMillis())
+        || (signedIn() && (resource.data.ownerId == me() || resource.data.get('replacementUid', '') == me()));
+      allow list: if signedIn() && resource.data.ownerId == me();
+      allow write: if false; // created and changed only by Cloud Functions
+
+      match /submissions/{sid} {
+        allow read: if signedIn() && (
+          get(/databases/$(database)/documents/handoffs/$(token)).data.ownerId == me()
+          || get(/databases/$(database)/documents/handoffs/$(token)).data.get('replacementUid', '') == me());
+        allow write: if false;
+      }
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
